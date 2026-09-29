@@ -6,7 +6,7 @@
 
 > [!TIP]
 > **开箱即用，无需配置本地 Python 开发环境！**
-> 本项目已通过 GitHub Actions 自动构建 Windows 与 macOS 双平台客户端。请直接前往 [👉 GitHub Releases 下载最新版本 (v2.0.8)](https://github.com/x554960766/wechat-mp-tools/releases)。
+> 本项目已通过 GitHub Actions 自动构建 Windows 与 macOS 双平台客户端。请直接前往 [👉 GitHub Releases 下载最新版本 (v2.0.9)](https://github.com/x554960766/wechat-mp-tools/releases)。
 
 ### macOS 版本选择
 
@@ -170,6 +170,14 @@ python app.py    # 浏览器模式（访问 http://localhost:5200）
 ---
 
 ## 📝 更新日志 (Changelog)
+
+### v2.0.9 (2026-09-29)
+- **📹 微信视频号下载与解析深度优化**：
+  - **修复原始画质 400 Bad Request 错误**：彻底修复历史遗留逻辑过度剥离视频 URL 鉴权参数（`sign`、`basedata`、`svrbypass` 等）导致腾讯 CDN 验签失败（`decrypt token failed`）的问题，精准移除转码标记保留全套验签信息；
+  - **修复元宝 Cookie 失效错误透传**：本地元宝解析异常时精准提取并展示详细错误原因，不再被兜底的云端通道错误掩盖，提示用户及时刷新凭证；
+  - **优化国内 CDN 下载直连与性能提升**：流式下载视频时强制直连国内微信 CDN，绕过可能存在的慢速代理中转；增大 I/O 缓冲区至 128KB，大幅降低线程锁竞争；
+  - **彻底解决下载弹窗频闪问题**：移除遮罩层 GPU 模糊滤镜及冗余动画重栅格化开销，平滑过渡画质选择与下载进度，杜绝窗口频闪；
+  - **新增下载速度与体积动态感知**：弹窗实时呈现当前下载进度、已下载大小/总大小及瞬时下载速率（如 `14.2 MB / 31.4 MB · 3.8 MB/s`）。
 
 ### v2.0.8 (2026-09-22)
 - **🎵 抖音模块深度重构与升级**：
