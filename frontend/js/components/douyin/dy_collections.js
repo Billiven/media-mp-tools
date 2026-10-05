@@ -6,10 +6,14 @@ const DyCollectionsPage = {
     selectedFolderId: '',
     folders: [],
 
+    // 批量选择状态
+    isSelectMode: false,
+    selectedIds: new Set(),
+
     render() {
         return `
             <div class="page-header">
-                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 12px;">
                     <div style="display: flex; flex-direction: column; gap: 8px;">
                         <h2 class="page-title">收藏视频</h2>
                         <p class="page-description">查看账号收藏的视频内容</p>
@@ -20,13 +24,7 @@ const DyCollectionsPage = {
                             </select>
                         </div>
                     </div>
-                    <button class="btn btn-primary" onclick="DyCollectionsPage.refresh()" id="dy-recommend-refresh" style="align-self: flex-start;">
-                        <svg viewBox="0 0 24 24" fill="none" style="width: 16px; height: 16px; margin-right: 6px;">
-                            <polyline points="23 4 23 10 17 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                        刷新
-                    </button>
+                    <div id="dy-collection-header-actions" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;"></div>
                 </div>
             </div>
 
@@ -41,7 +39,7 @@ const DyCollectionsPage = {
                 <div id="dy-recommend-empty" style="display: none; text-align: center; padding: var(--spacing-2xl);">
                     <div style="width: 64px; height: 64px; margin: 0 auto var(--spacing-md); background: rgba(156, 39, 176, 0.1); border-radius: 20px; display: flex; align-items: center; justify-content: center;">
                         <svg viewBox="0 0 24 24" fill="none" style="width: 32px; height: 32px; color: #f44336;">
-                            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 2 9.27 8.91 8.26 12 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </div>
                     <p style="font-size: 1.1rem; margin-bottom: 8px;">暂无收藏视频</p>
@@ -61,8 +59,91 @@ const DyCollectionsPage = {
         this.hasMore = true;
         this.selectedFolderId = '';
         this.folders = [];
+        this.isSelectMode = false;
+        this.selectedIds = new Set();
         await this.loadFolders();
         await this.loadFeed();
+        this.renderHeaderActions();
+    },
+
+    renderHeaderActions() {
+        const container = document.getElementById('dy-collection-header-actions');
+        if (!container) return;
+
+        if (this.isSelectMode) {
+            const count = this.selectedIds.size;
+            container.innerHTML = `
+                <button class="btn btn-secondary" onclick="DyCollectionsPage.toggleSelectAll()">
+                    ${count > 0 && count === this.videos.length ? '取消全选' : '全选'}
+                </button>
+                <button class="btn btn-primary" onclick="DyCollectionsPage.downloadSelected()" id="dy-collection-download-btn" ${count === 0 ? 'disabled' : ''}>
+                    <svg viewBox="0 0 24 24" fill="none" style="width: 16px; height: 16px; margin-right: 6px; display: inline-block; vertical-align: text-bottom;">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <polyline points="7 10 12 15 17 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    开始下载 (${count})
+                </button>
+                <button class="btn btn-secondary" onclick="DyCollectionsPage.exitSelectMode()">
+                    取消批量下载
+                </button>
+            `;
+        } else {
+            container.innerHTML = `
+                <button class="btn btn-primary" onclick="DyCollectionsPage.downloadAll()" id="dy-collection-download-all-btn">
+                    📥 批量下载全部收藏
+                </button>
+                <button class="btn btn-primary" onclick="DyCollectionsPage.enterSelectMode()">
+                    <svg viewBox="0 0 24 24" fill="none" style="width: 16px; height: 16px; margin-right: 6px; display: inline-block; vertical-align: text-bottom;">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <polyline points="7 10 12 15 17 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    批量下载
+                </button>
+                <button class="btn btn-secondary" onclick="DyCollectionsPage.refresh()" id="dy-recommend-refresh">
+                    <svg viewBox="0 0 24 24" fill="none" style="width: 16px; height: 16px; margin-right: 6px;">
+                        <polyline points="23 4 23 10 17 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    刷新
+                </button>
+            `;
+        }
+    },
+
+    enterSelectMode() {
+        this.isSelectMode = true;
+        this.selectedIds = new Set();
+        this.renderHeaderActions();
+        this.renderVideos();
+    },
+
+    exitSelectMode() {
+        this.isSelectMode = false;
+        this.selectedIds = new Set();
+        this.renderHeaderActions();
+        this.renderVideos();
+    },
+
+    toggleSelectAll() {
+        const allSelected = this.videos.length > 0 && this.selectedIds.size === this.videos.length;
+        if (allSelected) {
+            this.selectedIds = new Set();
+        } else {
+            this.selectedIds = new Set(this.videos.map(v => v.aweme_id));
+        }
+        this.renderHeaderActions();
+        this.renderVideos();
+    },
+
+    toggleVideoSelection(awemeId) {
+        if (this.selectedIds.has(awemeId)) {
+            this.selectedIds.delete(awemeId);
+        } else {
+            this.selectedIds.add(awemeId);
+        }
+        this.renderHeaderActions();
     },
 
     async loadFolders() {
@@ -74,11 +155,10 @@ const DyCollectionsPage = {
                 return;
             }
             this.folders = data.collects_list || data.collect_list || [];
-            
-            // 渲染下拉选择框
+
             const select = document.getElementById('dy-collection-folder-select');
             if (select) {
-                select.innerHTML = '<option value="">全部收藏</option>' + 
+                select.innerHTML = '<option value="">全部收藏</option>' +
                     this.folders.map(folder => {
                         const fid = folder.collects_id_str || folder.collect_id_str || folder.id_str || folder.collects_id || folder.collect_id || folder.id;
                         const name = folder.collects_name || folder.collect_name || folder.name || folder.title || '未命名收藏夹';
@@ -96,7 +176,12 @@ const DyCollectionsPage = {
         this.videos = [];
         this.cursor = 0;
         this.hasMore = true;
+        this.selectedIds = new Set();
         await this.loadFeed();
+        if (this.isSelectMode) {
+            this.renderHeaderActions();
+            this.renderVideos();
+        }
     },
 
     async loadFeed() {
@@ -106,7 +191,7 @@ const DyCollectionsPage = {
         this.showLoading();
 
         try {
-            const url = this.selectedFolderId 
+            const url = this.selectedFolderId
                 ? `/api/douyin/collects/video/list?collect_id=${this.selectedFolderId}&count=18&cursor=${this.cursor}`
                 : `/api/douyin/collected?count=18&cursor=${this.cursor}`;
             const res = await fetch(url);
@@ -121,6 +206,10 @@ const DyCollectionsPage = {
             this.cursor = data.max_cursor || 0;
             this.hasMore = data.has_more || false;
 
+            // 过滤已不在列表中的选中的 ID
+            const validIds = new Set(videos.map(v => v.aweme_id));
+            this.selectedIds = new Set([...this.selectedIds].filter(id => validIds.has(id)));
+
             this.renderVideos();
         } catch (err) {
             Toast.show(err.message, 'error');
@@ -128,6 +217,7 @@ const DyCollectionsPage = {
         } finally {
             this.loading = false;
             this.hideLoading();
+            if (this.isSelectMode) this.renderHeaderActions();
         }
     },
 
@@ -142,7 +232,7 @@ const DyCollectionsPage = {
         }
 
         try {
-            const url = this.selectedFolderId 
+            const url = this.selectedFolderId
                 ? `/api/douyin/collects/video/list?collect_id=${this.selectedFolderId}&count=18&cursor=${this.cursor}`
                 : `/api/douyin/collected?count=18&cursor=${this.cursor}`;
             const res = await fetch(url);
@@ -166,6 +256,7 @@ const DyCollectionsPage = {
                 btn.disabled = false;
                 btn.textContent = '加载更多';
             }
+            if (this.isSelectMode) this.renderHeaderActions();
         }
     },
 
@@ -173,8 +264,13 @@ const DyCollectionsPage = {
         this.videos = [];
         this.cursor = 0;
         this.hasMore = true;
+        this.selectedIds = new Set();
         await this.loadFolders();
         await this.loadFeed();
+        if (this.isSelectMode) {
+            this.renderHeaderActions();
+            this.renderVideos();
+        }
     },
 
     renderVideos() {
@@ -205,9 +301,27 @@ const DyCollectionsPage = {
         const likes = this.formatNumber(video.statistics?.digg_count || 0);
         const comments = this.formatNumber(video.statistics?.comment_count || 0);
         const awemeId = video.aweme_id;
+        const isSelected = this.selectedIds.has(awemeId);
+
+        const checkboxHtml = this.isSelectMode ? `
+            <div style="position: absolute; top: 8px; left: 8px; z-index: 10; background: rgba(0,0,0,0.7); border-radius: 50%; padding: 4px; display: flex; align-items: center; justify-content: center;">
+                <input type="checkbox" class="dy-collection-checkbox" id="dy-collection-check-${awemeId}"
+                    ${isSelected ? 'checked' : ''}
+                    onchange="DyCollectionsPage.toggleVideoSelection('${awemeId}')"
+                    onClick="event.stopPropagation()"
+                    style="width: 18px; height: 18px; cursor: pointer;">
+            </div>
+            ${isSelected ? `<div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; border: 3px solid #ff9800; border-radius: 12px; pointer-events: none;"></div>` : ''}
+        ` : '';
+
+        const cardBorder = isSelected ? '3px solid #ff9800' : '';
 
         return `
-            <div class="video-card" style="border-radius: 12px; overflow: hidden; background: var(--bg-secondary); transition: transform 0.3s, box-shadow 0.3s; cursor: pointer;" onmouseenter="this.style.transform='translateY(-4px)'; this.style.boxShadow='0 8px 24px rgba(0,0,0,0.15)';" onmouseleave="this.style.transform=''; this.style.boxShadow='';" onclick="if(event.target.tagName !== 'BUTTON') window.open('https://www.douyin.com/video/${awemeId}', '_blank')">
+            <div class="video-card" style="border-radius: 12px; overflow: hidden; background: var(--bg-secondary); transition: transform 0.3s, box-shadow 0.3s; cursor: pointer; border: ${cardBorder}; ${isSelected ? 'box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.3);' : ''}"
+                onmouseenter="this.style.transform='translateY(-4px)'; this.style.boxShadow='0 8px 24px rgba(0,0,0,0.15)';"
+                onmouseleave="if(!DyCollectionsPage.selectedIds.has('${awemeId}')) {this.style.transform=''; this.style.boxShadow='';}"
+                onclick="if(event.target.tagName !== 'BUTTON' && event.target.tagName !== 'INPUT') { ${this.isSelectMode ? `DyCollectionsPage.toggleVideoSelection('${awemeId}'); DyCollectionsPage.renderVideos();` : `window.open('https://www.douyin.com/video/${awemeId}', '_blank')`} }">
+                ${checkboxHtml}
                 <div style="position: relative; padding-top: 56.25%; background: var(--bg-body);">
                     <img src="${cover}" alt="${title}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover;" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22400%22 height=%22300%22%3E%3Crect fill=%22%23f0f0f0%22 width=%22400%22 height=%22300%22/%3E%3C/svg%3E'">
                     <div style="position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.6); color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem;">
@@ -224,7 +338,7 @@ const DyCollectionsPage = {
                         <span>❤️ ${likes}</span>
                         <span>💬 ${comments}</span>
                     </div>
-                    <button class="btn btn-primary btn-sm" onclick="DyCollectionsPage.downloadVideo('${awemeId}')" style="width: 100%;">下载视频</button>
+                    ${this.isSelectMode ? '' : `<button class="btn btn-primary btn-sm" onclick="DyCollectionsPage.downloadVideo('${awemeId}')" style="width: 100%;">下载视频</button>`}
                 </div>
             </div>
         `;
@@ -244,6 +358,81 @@ const DyCollectionsPage = {
         } catch (err) {
             Toast.show(err.message, 'error');
         }
+    },
+
+    async downloadSelected() {
+        if (this.selectedIds.size === 0) {
+            Toast.show('请先选择视频', 'error');
+            return;
+        }
+
+        const selectedVideos = this.videos.filter(v => this.selectedIds.has(v.aweme_id));
+        if (selectedVideos.length === 0) {
+            Toast.show('选中的视频不在列表中，请重新加载', 'error');
+            return;
+        }
+
+        Toast.show(`批量下载已启动！共 ${selectedVideos.length} 个视频`, 'success');
+
+        let success = 0, failed = 0;
+        for (const video of selectedVideos) {
+            try {
+                const res = await fetch('/api/douyin/download-single', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ url: video.aweme_id })
+                });
+                const data = await res.json();
+                if (data.error) {
+                    failed++;
+                    console.warn(`下载 ${video.aweme_id} 失败: ${data.error}`);
+                } else {
+                    success++;
+                }
+            } catch (err) {
+                failed++;
+                console.error(`下载 ${video.aweme_id} 异常:`, err);
+            }
+            await new Promise(r => setTimeout(r, 500));
+        }
+
+        Toast.show(`批量下载完成！成功 ${success}，失败 ${failed}`, success > 0 ? 'success' : 'error');
+    },
+
+    async downloadAll() {
+        if (this.videos.length === 0) {
+            Toast.show('暂无视频可下载', 'error');
+            return;
+        }
+
+        if (!confirm(`确定要批量下载全部 ${this.videos.length} 个收藏视频吗？\n注意：这只会下载当前页加载的视频（需点「加载更多」分页）。`)) {
+            return;
+        }
+
+        Toast.show(`批量下载全部收藏已启动！共 ${this.videos.length} 个视频`, 'success');
+
+        let success = 0, failed = 0;
+        for (const video of this.videos) {
+            try {
+                const res = await fetch('/api/douyin/download-single', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ url: video.aweme_id })
+                });
+                const data = await res.json();
+                if (data.error) {
+                    failed++;
+                } else {
+                    success++;
+                }
+            } catch (err) {
+                failed++;
+                console.error(err);
+            }
+            await new Promise(r => setTimeout(r, 500));
+        }
+
+        Toast.show(`批量下载完成！成功 ${success}，失败 ${failed}`, success > 0 ? 'success' : 'error');
     },
 
     showLoading() {
@@ -287,5 +476,6 @@ const DyCollectionsPage = {
 
     destroy() {
         this.videos = [];
+        this.selectedIds = new Set();
     }
 };

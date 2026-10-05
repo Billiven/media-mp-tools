@@ -48,7 +48,32 @@ const DyLikedPage = {
         const hash = window.location.hash;
         const queryString = hash.includes('?') ? hash.split('?')[1] : '';
         const urlParams = new URLSearchParams(queryString || window.location.search);
-        this.secUid = urlParams.get('sec_uid') || '';
+        let secUid = urlParams.get('sec_uid') || '';
+
+        // Fix #1: 如果 URL 里没有 sec_uid，从已登录账号信息里获取
+        if (!secUid && window.App && window.App.douyinAccountInfo) {
+            secUid = window.App.douyinAccountInfo.sec_uid || '';
+        }
+
+        // Fix #2: 如果还是没有 sec_uid，从全局状态获取
+        if (!secUid) {
+            try {
+                const data = await API.douyin.auth.status();
+                if (data && data.account_info && data.account_info.sec_uid) {
+                    secUid = data.account_info.sec_uid;
+                }
+            } catch (e) {
+                console.warn('Failed to get sec_uid from auth status:', e);
+            }
+        }
+
+        if (!secUid) {
+            console.warn('No sec_uid available, liked videos will not load');
+            Toast.show('请先登录抖音账号', 'error');
+            this.secUid = '';
+        } else {
+            this.secUid = secUid;
+        }
 
         this.videos = [];
         this.cursor = 0;

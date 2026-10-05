@@ -239,23 +239,61 @@ class DouyinClient:
             return False
 
     def _get_common_headers(self) -> dict:
-        """通用请求头"""
+        """通用请求头 - 根据运行的操作系统选择匹配的 UA Profile"""
+        import platform
+        if platform.system() == "Darwin":
+            # macOS 系统 - 使用 macOS UA profile
+            user_agent = (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/133.0.0.0 Safari/537.36"
+            )
+            sec_ch_ua_platform = '"macOS"'
+        else:
+            # Windows 系统
+            user_agent = USER_AGENT
+            sec_ch_ua_platform = '"Windows"'
+
         return {
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Referer": REFERER,
-            "User-Agent": USER_AGENT,
+            "User-Agent": user_agent,
             "sec-fetch-site": "same-origin",
             "sec-fetch-mode": "cors",
             "sec-fetch-dest": "empty",
-            "sec-ch-ua-platform": '"Windows"',
+            "sec-ch-ua-platform": sec_ch_ua_platform,
             "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua": '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"',
+            "sec-ch-ua": '"Not(A:Brand";v="993", "Google Chrome";v="133", "Chromium";v="133"',
             "priority": "u=1, i",
         }
 
     def _get_common_params(self) -> dict:
-        """通用请求参数"""
+        """通用请求参数 - 根据运行的操作系统选择匹配的 Profile"""
+        import platform
+        is_macos = platform.system() == "Darwin"
+
+        # 根据系统选择 profile
+        if is_macos:
+            browser_platform = "MacIntel"
+            os_name = "Mac OS"
+            os_version = "10.15.7"
+            pc_libra_divert = "Mac"
+            # MacBook Pro 2017 实际参数
+            screen_width = "2560"
+            screen_height = "1600"
+            cpu_core_num = "4"
+            device_memory = "8"
+        else:
+            browser_platform = "Win32"
+            os_name = "Windows"
+            os_version = "10"
+            pc_libra_divert = "Windows"
+            screen_width = "1920"
+            screen_height = "1080"
+            cpu_core_num = "16"
+            device_memory = "8"
+
         return {
             "device_platform": "webapp",
             "aid": "6383",
@@ -265,24 +303,24 @@ class DouyinClient:
             "version_code": "190500",
             "version_name": "29.3.0",
             "cookie_enabled": "true",
-            "screen_width": "1920",
-            "screen_height": "1080",
+            "screen_width": screen_width,
+            "screen_height": screen_height,
             "browser_language": "zh-CN",
-            "browser_platform": "Win32",
+            "browser_platform": browser_platform,
             "browser_name": "Chrome",
             "browser_version": "133.0.0.0",
             "browser_online": "true",
             "engine_name": "Blink",
             "engine_version": "133.0.0.0",
-            "os_name": "Windows",
-            "os_version": "10",
-            "cpu_core_num": "16",
-            "device_memory": "8",
+            "os_name": os_name,
+            "os_version": os_version,
+            "cpu_core_num": cpu_core_num,
+            "device_memory": device_memory,
             "platform": "PC",
             "downlink": "10",
             "effective_type": "4g",
             "round_trip_time": "50",
-            "pc_libra_divert": "Windows",
+            "pc_libra_divert": pc_libra_divert,
             "support_h265": "1",
             "support_dash": "1",
             "disable_rs": "0",
