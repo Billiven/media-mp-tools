@@ -608,6 +608,132 @@ class DouyinClient:
             finally:
                 browser.close()
 
+    def _fetch_user_videos_via_browser(self, sec_uid: str = "", max_cursor: int = 0, count: int = 18, strategy: str = "2") -> dict:
+        """通过后台浏览器会话获取用户作品/合集/直播回放列表
+        适用 publish_video_strategy_type: 1(日常) 2(作品) 3(直播回放)
+        自动激活对应 Tab，无限滚动翻页
+        """
+        from playwright.sync_api import sync_playwright
+        from backend.runtime import launch_chromium
+
+        settings = get_settings()
+        cookie_str = settings.get("douyin_cookie", "").strip()
+        cookie_objs = []
+        for item in cookie_str.split(";"):
+            item = item.strip()
+            if "=" in item:
+                k, _, v = item.partition("=")
+                if k.strip() and v.strip():
+                    cookie_objs.append({
+                        "name": k.strip(),
+                        "value": v.strip(),
+                        "domain": ".douyin.com",
+                        "path": "/"
+                    })
+
+        target_url = f"https://www.douyin.com/user/{sec_uid}"
+        # strategy: 1=日常(story), 2=作品(post), 3=直播回放(replay)
+        strategy_to_tab = {
+            "1": "#semiTabportfolio",   # 日常
+            "2": "#semiTabcpost",       # 作品 (Tab id 需视情况调整)
+            "3": "#semiTabplaylist",    # 直播回放
+        }
+        target_tab = strategy_to_tab.get(strategy)
+
+        with sync_playwright() as p:
+            browser = launch_chromium(p.chromium, headless=True, args=["--disable-blink-features=AutomationControlled"])
+            try:
+                context = browser.new_context(
+                    user_agent=USER_AGENT,
+                    viewport={"width": 1440, "height": 900}
+                )
+                if cookie_objs:
+                    context.add_cookies(cookie_objs)
+                page = context.new_page()
+
+                captured_pages = []
+                def on_res(resp):
+                    if "aweme/post" in resp.url and resp.status == 200:
+                        try:
+                            data = resp.json()
+                            if isinstance(data, dict) and data.get("status_code") == 0 and data.get("aweme_list") is not None:
+                                # 去重
+                                if not any(cp.get("max_cursor") == data.get("max_cursor") and len(cp.get("aweme_list", [])) == len(data.get("aweme_list", [])) for cp in captured_pages):
+                                    captured_pages.append(data)
+                        except Exception:
+                            pass
+
+                page.on("response", on_res)
+                try:
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
+                except Exception:
+                    pass
+
+                # 点击对应 Tab 触发第一页加载
+                for _ in range(10):
+                    if captured_pages:
+                        break
+                    if target_tab:
+                        try:
+                            tab = page.locator(target_tab)
+                            if tab.is_visible():
+                                tab.click(force=True)
+                        except Exception:
+                            pass
+                    time.sleep(1.0)
+
+                # 通过滚动页面触发后续游标请求
+                scroll_rounds = 0
+                max_scroll_rounds = 30
+                if max_cursor != 0 and str(max_cursor) != "0":
+                    target_max_cursor = str(max_cursor)
+                else:
+                    target_max_cursor = None
+
+                last_count = 0
+                stable_rounds = 0
+                while scroll_rounds < max_scroll_rounds:
+                    page.evaluate("() => window.scrollBy(0, 2000)")
+                    time.sleep(1.5)
+                    scroll_rounds += 1
+                    if len(captured_pages) > last_count:
+                        last_count = len(captured_pages)
+                        stable_rounds = 0
+                    else:
+                        stable_rounds += 1
+                        # 稳定3轮无新增 → 已到底
+                        if stable_rounds >= 3:
+                            break
+
+                # 提取匹配游标的页数据
+                result = None
+                if not captured_pages:
+                    result = {"status_code": 0, "aweme_list": [], "has_more": False, "max_cursor": 0}
+                elif not target_max_cursor or target_max_cursor == "0":
+                    result = captured_pages[0]
+                else:
+                    for idx in range(len(captured_pages) - 1):
+                        if str(captured_pages[idx].get("max_cursor")) == target_max_cursor:
+                            result = captured_pages[idx + 1]
+                            break
+                    if not result:
+                        # 回退到最后一页
+                        result = captured_pages[-1]
+
+                # 自动将最新产生的 Cookie 回写设置
+                try:
+                    updated_cookies = context.cookies()
+                    if updated_cookies:
+                        new_ck = "; ".join([f"{c['name']}={c['value']}" for c in updated_cookies])
+                        settings["douyin_cookie"] = new_ck
+                        save_settings(settings)
+                except Exception:
+                    pass
+
+                return result
+            finally:
+                browser.close()
+
     def _fetch_via_browser(self, endpoint: str, method: str = "GET", params: dict = None, body: dict = None, referer: str = "") -> dict:
         """通过后台无头浏览器在已授权的上下文中执行 fetch 请求，以绕过 Argus/uifid 等高级风控拦截"""
         from playwright.sync_api import sync_playwright
@@ -1313,8 +1439,10 @@ class DouyinClient:
     # ── 用户作品列表 API ──────────────────────────────────
 
     def get_user_videos(self, sec_uid: str, max_cursor: int = 0, count: int = 18) -> tuple:
-        """获取用户发布的作品列表，返回 (aweme_list, next_cursor, has_more)"""
-        data = self.api_get(API_USER_POST, {
+        """获取用户发布的作品列表，返回 (aweme_list, next_cursor, has_more)
+        直连失败时自动切换至浏览器会话安全通道 (绕过 Argus/抖音风控)
+        """
+        params = {
             "publish_video_strategy_type": "2",
             "sec_user_id": sec_uid,
             "max_cursor": str(max_cursor),
@@ -1324,25 +1452,45 @@ class DouyinClient:
             "time_list_query": "0",
             "whale_cut_token": "",
             "count": str(count),
-        }, skip_sign=True)
+        }
 
-        if data.get("status_code") != 0:
-            msg = data.get("status_msg", "未知错误")
-            raise Exception(f"获取用户作品列表失败: {msg}")
+        try:
+            data = self.api_get(API_USER_POST, params, skip_sign=True)
+            if data.get("status_code") != 0:
+                msg = data.get("status_msg", "未知错误")
+                raise Exception(f"获取用户作品列表失败: {msg}")
 
-        aweme_list = data.get("aweme_list") or []
-        has_more = data.get("has_more", 0)
-        if isinstance(has_more, bool):
-            has_more = has_more
-        else:
-            has_more = int(has_more) == 1
-        next_cursor = data.get("max_cursor", 0)
+            aweme_list = data.get("aweme_list") or []
+            has_more = data.get("has_more", 0)
+            has_more = has_more if isinstance(has_more, bool) else (int(has_more) == 1)
+            next_cursor = data.get("max_cursor", 0)
+            return aweme_list, next_cursor, has_more
+        except Exception as e:
+            err_str = str(e)
+            # 检测到风控拦截或路径错误 → 切换至浏览器通道
+            if ("403" in err_str or "Argus" in err_str or "Uifid" in err_str or "Forbidden" in err_str
+                or "404" in err_str or "Not Found" in err_str or "502" in err_str):
+                _add_log(f"⚠️ 抖音作者作品直连异常 ({err_str[:60]})，自动切换至浏览器会话安全通道...")
+                try:
+                    data = self._fetch_user_videos_via_browser(sec_uid, max_cursor, count, strategy="2")
+                except Exception as browser_err:
+                    raise Exception(f"浏览器通道也失败: {browser_err}") from e
 
-        return aweme_list, next_cursor, has_more
+                if data.get("status_code") not in (0, None):
+                    raise Exception(f"浏览器通道获取失败: {data.get('status_msg', '未知错误')}")
+
+                aweme_list = data.get("aweme_list") or []
+                has_more = data.get("has_more", 0)
+                has_more = has_more if isinstance(has_more, bool) else (int(has_more) == 1)
+                next_cursor = data.get("max_cursor", 0)
+                return aweme_list, next_cursor, has_more
+            raise
 
     def get_user_stories(self, sec_uid: str, max_cursor: int = 0, count: int = 18) -> tuple:
-        """获取用户日常列表，返回 (aweme_list, next_cursor, has_more)"""
-        data = self.api_get(API_USER_POST, {
+        """获取用户日常列表，返回 (aweme_list, next_cursor, has_more)
+        直连失败时自动切换至浏览器会话安全通道
+        """
+        params = {
             "publish_video_strategy_type": "1",
             "sec_user_id": sec_uid,
             "max_cursor": str(max_cursor),
@@ -1352,25 +1500,40 @@ class DouyinClient:
             "time_list_query": "0",
             "whale_cut_token": "",
             "count": str(count),
-        }, skip_sign=True)
+        }
 
-        if data.get("status_code") != 0:
-            msg = data.get("status_msg", "未知错误")
-            raise Exception(f"获取用户日常列表失败: {msg}")
+        try:
+            data = self.api_get(API_USER_POST, params, skip_sign=True)
+            if data.get("status_code") != 0:
+                msg = data.get("status_msg", "未知错误")
+                raise Exception(f"获取用户日常列表失败: {msg}")
 
-        aweme_list = data.get("aweme_list") or []
-        has_more = data.get("has_more", 0)
-        if isinstance(has_more, bool):
-            has_more = has_more
-        else:
-            has_more = int(has_more) == 1
-        next_cursor = data.get("max_cursor", 0)
-
-        return aweme_list, next_cursor, has_more
+            aweme_list = data.get("aweme_list") or []
+            has_more = data.get("has_more", 0)
+            has_more = has_more if isinstance(has_more, bool) else (int(has_more) == 1)
+            next_cursor = data.get("max_cursor", 0)
+            return aweme_list, next_cursor, has_more
+        except Exception as e:
+            err_str = str(e)
+            if ("403" in err_str or "Argus" in err_str or "Uifid" in err_str or "Forbidden" in err_str
+                or "404" in err_str or "Not Found" in err_str or "502" in err_str):
+                _add_log(f"⚠️ 抖音日常直连异常，自动切换至浏览器通道...")
+                try:
+                    data = self._fetch_user_videos_via_browser(sec_uid, max_cursor, count, strategy="1")
+                except Exception as browser_err:
+                    raise Exception(f"浏览器通道也失败: {browser_err}") from e
+                aweme_list = data.get("aweme_list") or []
+                has_more = data.get("has_more", 0)
+                has_more = has_more if isinstance(has_more, bool) else (int(has_more) == 1)
+                next_cursor = data.get("max_cursor", 0)
+                return aweme_list, next_cursor, has_more
+            raise
 
     def get_user_replays(self, sec_uid: str, max_cursor: int = 0, count: int = 18) -> tuple:
-        """获取博主直播回放列表，返回 (aweme_list, next_cursor, has_more)"""
-        data = self.api_get(API_USER_POST, {
+        """获取博主直播回放列表，返回 (aweme_list, next_cursor, has_more)
+        直连失败时自动切换至浏览器会话安全通道
+        """
+        params = {
             "publish_video_strategy_type": "2",
             "sec_user_id": sec_uid,
             "max_cursor": str(max_cursor),
@@ -1380,11 +1543,24 @@ class DouyinClient:
             "time_list_query": "0",
             "whale_cut_token": "",
             "count": str(count),
-        }, skip_sign=True)
+        }
 
-        if data.get("status_code") != 0:
-            msg = data.get("status_msg", "未知错误")
-            raise Exception(f"获取用户回放列表失败: {msg}")
+        try:
+            data = self.api_get(API_USER_POST, params, skip_sign=True)
+            if data.get("status_code") != 0:
+                msg = data.get("status_msg", "未知错误")
+                raise Exception(f"获取用户回放列表失败: {msg}")
+        except Exception as e:
+            err_str = str(e)
+            if ("403" in err_str or "Argus" in err_str or "Uifid" in err_str or "Forbidden" in err_str
+                or "404" in err_str or "Not Found" in err_str or "502" in err_str):
+                _add_log("⚠️ 抖音直播回放直连异常，自动切换至浏览器通道...")
+                try:
+                    data = self._fetch_user_videos_via_browser(sec_uid, max_cursor, count, strategy="3")
+                except Exception as browser_err:
+                    raise Exception(f"浏览器通道也失败: {browser_err}") from e
+            else:
+                raise
 
         all_aweme = data.get("aweme_list") or []
         replays = []
