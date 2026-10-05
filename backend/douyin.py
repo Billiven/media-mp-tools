@@ -633,12 +633,8 @@ class DouyinClient:
 
         target_url = f"https://www.douyin.com/user/{sec_uid}"
         # strategy: 1=日常(story), 2=作品(post), 3=直播回放(replay)
-        strategy_to_tab = {
-            "1": "#semiTabportfolio",   # 日常
-            "2": "#semiTabcpost",       # 作品 (Tab id 需视情况调整)
-            "3": "#semiTabplaylist",    # 直播回放
-        }
-        target_tab = strategy_to_tab.get(strategy)
+        # 注：进入用户主页时「作品」Tab 为默认激活态，其请求会自然发出，
+        #     只有策略 1/3 需要额外点击切换 Tab（见下方多候选选择器逻辑）。
 
         with sync_playwright() as p:
             browser = launch_chromium(p.chromium, headless=True, args=["--disable-blink-features=AutomationControlled"])
@@ -665,22 +661,36 @@ class DouyinClient:
 
                 page.on("response", on_res)
                 try:
-                    page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
+                    page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
                 except Exception:
                     pass
 
-                # 点击对应 Tab 触发第一页加载
-                for _ in range(10):
+                # 先等页面自身的默认 Tab（作品）自然发起请求
+                for _ in range(12):
                     if captured_pages:
                         break
-                    if target_tab:
-                        try:
-                            tab = page.locator(target_tab)
-                            if tab.is_visible():
-                                tab.click(force=True)
-                        except Exception:
-                            pass
                     time.sleep(1.0)
+
+                # 若还没数据且需要切换 Tab（日常/直播回放），尝试多组候选选择器
+                if not captured_pages and strategy != "2":
+                    tab_candidates = {
+                        "1": ["#semiTabportfolio", "[data-e2e='user-tab-portfolio']",
+                              "div[role='tab']:has-text('日常')", "span:has-text('日常')"],
+                        "3": ["#semiTabplaylist", "[data-e2e='user-tab-playlist']",
+                              "div[role='tab']:has-text('直播回放')", "span:has-text('直播回放')"],
+                    }.get(strategy, [])
+                    for _ in range(10):
+                        if captured_pages:
+                            break
+                        for sel in tab_candidates:
+                            try:
+                                loc = page.locator(sel).first
+                                if loc.count() > 0 and loc.is_visible():
+                                    loc.click(force=True, timeout=2000)
+                                    break
+                            except Exception:
+                                continue
+                        time.sleep(1.0)
 
                 # 通过滚动页面触发后续游标请求
                 scroll_rounds = 0
@@ -705,21 +715,6 @@ class DouyinClient:
                         if stable_rounds >= 3:
                             break
 
-                # 提取匹配游标的页数据
-                result = None
-                if not captured_pages:
-                    result = {"status_code": 0, "aweme_list": [], "has_more": False, "max_cursor": 0}
-                elif not target_max_cursor or target_max_cursor == "0":
-                    result = captured_pages[0]
-                else:
-                    for idx in range(len(captured_pages) - 1):
-                        if str(captured_pages[idx].get("max_cursor")) == target_max_cursor:
-                            result = captured_pages[idx + 1]
-                            break
-                    if not result:
-                        # 回退到最后一页
-                        result = captured_pages[-1]
-
                 # 自动将最新产生的 Cookie 回写设置
                 try:
                     updated_cookies = context.cookies()
@@ -729,6 +724,47 @@ class DouyinClient:
                         save_settings(settings)
                 except Exception:
                     pass
+
+                # ── 第二级兜底：页面拦截无数据时，改为在浏览器上下文内直接 fetch ──
+                if not captured_pages:
+                    _add_log("⚠️ 页面拦截未捕获到 aweme/post 响应，改用浏览器内直接请求...")
+                    try:
+                        fallback_params = {
+                            "publish_video_strategy_type": strategy,
+                            "sec_user_id": sec_uid,
+                            "max_cursor": str(max_cursor),
+                            "locate_query": "false",
+                            "show_live_replay_strategy": "1",
+                            "need_time_list": "0",
+                            "time_list_query": "0",
+                            "whale_cut_token": "",
+                            "count": str(count),
+                        }
+                        direct = self._fetch_via_browser(
+                            "/aweme/v1/web/aweme/post/",
+                            method="GET",
+                            params=fallback_params,
+                            referer=target_url,
+                        )
+                        if direct and direct.get("aweme_list") is not None:
+                            return direct
+                    except Exception as fb_err:
+                        _add_log(f"⚠️ 浏览器内直接请求也失败: {fb_err}")
+
+                    return {"status_code": 0, "aweme_list": [], "has_more": False, "max_cursor": 0}
+
+                # 提取匹配游标的页数据
+                result = None
+                if not target_max_cursor or target_max_cursor == "0":
+                    result = captured_pages[0]
+                else:
+                    for idx in range(len(captured_pages) - 1):
+                        if str(captured_pages[idx].get("max_cursor")) == target_max_cursor:
+                            result = captured_pages[idx + 1]
+                            break
+                    if not result:
+                        # 回退到最后一页
+                        result = captured_pages[-1]
 
                 return result
             finally:
