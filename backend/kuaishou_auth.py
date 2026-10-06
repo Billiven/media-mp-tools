@@ -216,7 +216,15 @@ def _do_login():
                 time.sleep(2)
 
             if login_success:
-                _set_state("scanning", "登录成功，正在保存 Cookie...")
+                _set_state("scanning", "登录成功，等待 anti-bot cookie 全部生效...")
+                # 快手首次扫码成功后，kuaishou.atx-server / web_st 等 anti-bot cookie
+                # 需要在前端发请求时才会被种上；多停留几秒 + 访问一次个人页触发种 cookie
+                try:
+                    time.sleep(3)
+                    page.goto("https://www.kuaishou.com/", wait_until="domcontentloaded", timeout=15000)
+                    time.sleep(2)
+                except Exception:
+                    pass
                 cookies = context.cookies()
                 cookie_str = _serialize_cookies(cookies)
 

@@ -1184,7 +1184,21 @@ def user_feed():
         if not user_id:
             return jsonify({"error": "未能从链接解析出用户ID，请确认是快手用户主页链接"}), 400
 
-        raw_items, next_pcursor = client.get_user_feed(user_id, pcursor)
+        try:
+            raw_items, next_pcursor = client.get_user_feed(user_id, pcursor)
+        except Exception as api_err:
+            err_msg = str(api_err)
+            # 登录失效 → 给出明确可执行提示
+            if "登录已失效" in err_msg or "未登录" in err_msg or "扫码登录" in err_msg:
+                return jsonify({
+                    "error": (
+                        "快手登录已失效（服务端拒绝了保存的 Cookie）。\n\n"
+                        "请按下面任一方式操作后再次点击「查看作品」：\n"
+                        "1) 打开快手 App → 进入该作者主页 → 点击右上角分享 → 复制分享口令（形如 https://v.kuaishou.com/...）→ 把口令粘贴到「解析链接」即可免登录获取该作品；\n"
+                        "2) 在左侧「快手视频 → 登录管理」点击「重新扫码登录」刷新 Cookie 后再试。"
+                    )
+                }), 403
+            raise
         items = [KuaishouClient.parse_media_info(it) for it in raw_items]
 
         for it in raw_items:
