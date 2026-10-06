@@ -1128,7 +1128,13 @@ def download_profile():
 
 @kuaishou_bp.route("/user-feed", methods=["POST"])
 def user_feed():
-    """获取用户主页作品列表（分页，不下载）"""
+    """获取用户主页作品列表（分页，不下载）
+
+    策略：
+    1. 优先移动端分享页 (window.INIT_STATE) —— 完全免登录、跳过 PC 端签名风控
+    2. 移动端失败但有 Cookie：PC Web API
+    3. 移动端失败且无 Cookie：返回友好提示（用户可前往「登录管理」扫码，或确认 App 分享完整）
+    """
     data = request.get_json() or {}
     profile_url = data.get("url", "").strip()
     pcursor = data.get("pcursor", "") or ""
@@ -1136,13 +1142,16 @@ def user_feed():
     if not profile_url:
         return jsonify({"error": "请输入有效的主页链接"}), 400
 
+    settings = get_settings()
+    cookie_str = settings.get("kuaishou_cookie", "").strip()
+
     try:
         client = KuaishouClient()
         author = {}
         items = []
         next_pcursor = ""
 
-        # 1. 首页/首屏且传入了链接：优先尝试移动端分享页 HTML (window.INIT_STATE) 免登录极速抓取
+        # 1. 移动端分享页 HTML (window.INIT_STATE) —— 完全免登录
         if not pcursor:
             mobile_feeds, mobile_author, mobile_pcursor = client.get_user_feed_from_mobile(profile_url)
             if mobile_feeds:
@@ -1159,7 +1168,17 @@ def user_feed():
                     "notice": "快手网页端对历史分页有严格的反爬风控限制，当前已为您免登录获取该作者最新公开作品。如需特定历史作品，可直接在「解析链接」中粘贴单个作品链接进行下载。",
                 })
 
-        # 2. 如果不是移动端首屏，或移动端未提取到数据，使用 PC Web API / 浏览器内核抓取
+        # 2. 移动端失败：需要 Cookie 才能继续
+        if not cookie_str:
+            return jsonify({
+                "error": (
+                    "未通过移动端分享页解析到内容（可能链接不是 App 分享链接，或作品被作者设为不可公开浏览）。\n\n"
+                    "如要浏览该用户的主页作品，请点击左侧「快手视频 → 登录管理」扫码登录后重试；"
+                    "或确认你粘贴的是 App 分享的「快手口令」（含 https://v.kuaishou.com/...），而非网页链接。"
+                )
+            }), 403
+
+        # 3. 有 Cookie + 移动端失败：PC Web API / 浏览器兜底
         resolved = client.resolve_share_url(profile_url)
         user_id = KuaishouClient.extract_user_id(resolved) or KuaishouClient.extract_user_id(profile_url)
         if not user_id:
