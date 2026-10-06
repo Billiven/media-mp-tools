@@ -1470,6 +1470,7 @@ def remove_account(user_id):
         a for a in accounts
         if str(a.get("user_id", "")).strip() != user_id
         and str(a.get("kwaiId", "")).strip() != user_id
+        and str(a.get("eid", "")).strip() != user_id
         and str(a.get("nickname", "")).strip() != user_id
     ]
     if len(new_accounts) == len(accounts):
