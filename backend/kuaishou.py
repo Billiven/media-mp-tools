@@ -1179,6 +1179,19 @@ def user_feed():
             }), 403
 
         # 3. 有 Cookie + 移动端失败：PC Web API / 浏览器兜底
+        # 只有当输入本身就是 App 分享口令 (v.kuaishou.com) 但 mobile 解析异常时才继续走 PC。
+        # 普通网页 URL (www.kuaishou.com/profile/...) 现在 PC API 强制 sig4 签名，浏览器
+        # fallback 在 macOS sandbox 下容易让 app crash；这里主动放弃并提示用户改用 App 分享口令。
+        if "v.kuaishou.com" not in profile_url:
+            return jsonify({
+                "error": (
+                    "当前快手网页端对历史作品做了严格签名风控，PC API 已无法直接获取。\n\n"
+                    "请改用下面任一方式即可免登录获取该作者作品：\n"
+                    "打开快手 App → 进入该作者主页 → 点击右上角分享 → 复制「快手口令」"
+                    "（形如 https://v.kuaishou.com/...）→ 把口令粘贴到本输入框，点击「查看作品」即可。"
+                )
+            }), 403
+
         resolved = client.resolve_share_url(profile_url)
         user_id = KuaishouClient.extract_user_id(resolved) or KuaishouClient.extract_user_id(profile_url)
         if not user_id:
