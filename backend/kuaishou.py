@@ -492,14 +492,20 @@ class KuaishouClient:
                     pass
 
         if not captured_data:
-            raise Exception("未能通过浏览器获取到作品列表数据，请确认网络畅通且已在左侧扫码登录快手。")
+            raise Exception("未能通过浏览器获取到作品列表数据，请确认网络畅通后重试。")
 
         # 取最后一个捕获的数据
         latest_data = captured_data[-1]
         result = latest_data.get("result")
-        if result == 109 or latest_data.get("loginUrl"):
+        if result == 109:
+            # 服务端明确拒绝凭证，才算登录失效
             _notify_login_expired(True)
-            raise Exception("加载更多作品需要快手登录凭证，请在左侧点击「扫码登录」登录快手后重试。")
+            raise Exception("快手登录已失效，请在左侧「登录管理」重新扫码登录后重试。")
+        if latest_data.get("loginUrl"):
+            # PC 网页端未识别到登录态（通常是缺少 web 端会话 Cookie）。
+            # 这不等于账号 Cookie 失效——移动端分享页仍可免登录解析，
+            # 所以这里不标记全局"登录失效"，只提示改用 App 分享口令。
+            raise Exception("快手 PC 网页端未识别到登录态，无法读取该主页历史作品。")
 
         if "feeds" not in latest_data and result not in (1, None):
             raise Exception(f"获取用户作品列表失败 (result={result})。请确认已扫码登录，且该主页作品公开。")
@@ -524,8 +530,8 @@ class KuaishouClient:
         settings = get_settings()
         cookie_str = settings.get("kuaishou_cookie", "").strip()
         if not cookie_str:
-            _notify_login_expired(True)
-            raise Exception("未登录快手。获取用户作品列表需要快手登录凭证，请先在左侧「扫码登录」登录快手。")
+            # 未登录 ≠ 登录失效，不污染全局状态提示
+            raise Exception("未登录快手。获取用户作品列表需要快手登录凭证，请先在左侧「登录管理」扫码登录。")
 
         try:
             self._prime(f"https://www.kuaishou.com/profile/{user_id}")
@@ -543,9 +549,12 @@ class KuaishouClient:
                 _notify_login_expired(False)
                 return data.get("feeds") or [], data.get("pcursor") or ""
 
-            if result == 109 or data.get("loginUrl"):
+            if result == 109:
                 _notify_login_expired(True)
-                raise Exception("快手登录已失效，请先在左侧「扫码登录」重新登录快手后重试。")
+                raise Exception("快手登录已失效，请在左侧「登录管理」重新扫码登录后重试。")
+            if data.get("loginUrl"):
+                # PC 网页端未识别登录态，但账号 Cookie 本身未失效，不标记全局失效
+                raise Exception("快手 PC 网页端未识别到登录态，无法读取该主页历史作品。")
 
             # 遇到 result=50 (签名验证失败) 或风控拦截，切换到无头浏览器抓取
             if result == 50:
@@ -1159,6 +1168,8 @@ def user_feed():
                 items = [KuaishouClient.parse_media_info(it) for it in raw_items]
                 author = mobile_author or {}
                 user_id = KuaishouClient.extract_user_id(profile_url) or (author.get("name") if author else "")
+                # 移动端免登录解析成功，说明账号凭证可用：清掉可能残留的"登录失效"标记
+                _notify_login_expired(False)
                 return jsonify({
                     "user_id": user_id,
                     "author": author,
@@ -1201,14 +1212,24 @@ def user_feed():
             raw_items, next_pcursor = client.get_user_feed(user_id, pcursor)
         except Exception as api_err:
             err_msg = str(api_err)
-            # 登录失效 → 给出明确可执行提示
-            if "登录已失效" in err_msg or "未登录" in err_msg or "扫码登录" in err_msg:
+            # 只有服务端明确拒绝凭证才算登录失效；其余网页端限制都引导改用 App 分享口令
+            if "登录已失效" in err_msg or "未登录" in err_msg:
                 return jsonify({
                     "error": (
                         "快手登录已失效（服务端拒绝了保存的 Cookie）。\n\n"
                         "请按下面任一方式操作后再次点击「查看作品」：\n"
-                        "1) 打开快手 App → 进入该作者主页 → 点击右上角分享 → 复制分享口令（形如 https://v.kuaishou.com/...）→ 把口令粘贴到「解析链接」即可免登录获取该作品；\n"
+                        "1) 打开快手 App → 进入该作者主页 → 点击右上角分享 → 复制分享口令（形如 https://v.kuaishou.com/...）→ 把口令粘贴到本输入框即可免登录获取作品；\n"
                         "2) 在左侧「快手视频 → 登录管理」点击「重新扫码登录」刷新 Cookie 后再试。"
+                    )
+                }), 403
+            if ("未能通过浏览器" in err_msg or "PC 网页端" in err_msg
+                    or "获取用户作品列表失败" in err_msg):
+                return jsonify({
+                    "error": (
+                        "快手 PC 网页端当前无法读取该作者的历史作品列表（网页端签名风控限制），"
+                        "这与你的登录状态无关。\n\n"
+                        "请改用免登录方式获取：打开快手 App → 进入该作者主页 → 点击右上角分享 → "
+                        "复制「快手口令」（形如 https://v.kuaishou.com/...）→ 粘贴到本输入框后点击「查看作品」即可。"
                     )
                 }), 403
             raise

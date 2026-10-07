@@ -218,10 +218,24 @@ const KsUserPage = {
         if (!favBtn || !this.author) return;
         const isFav = favBtn.dataset.favorited === 'true';
         const targetId = this.author.user_id || this.author.kwaiId || this.author.eid || this.author.name;
+        const targetName = this.author.name || this.author.nickname;
 
         if (isFav) {
             try {
-                await API.kuaishou.removeAccount(targetId);
+                // 优先用 user_id/kwaiId/eid 匹配 accounts 里的同字段；
+                // 若 author.user_id 是真实快手ID（数值）而收藏记录里以昵称存了 user_id，会匹配失败，
+                // 这里拉一遍列表手动按昵称定位，避免"未找到该收藏作者"。
+                const res = await API.kuaishou.listAccounts();
+                const accounts = res.accounts || [];
+                const matched = accounts.find(a =>
+                    (targetId && (a.user_id === targetId || a.kwaiId === targetId || a.eid === targetId)) ||
+                    (targetName && (a.nickname === targetName || a.name === targetName))
+                );
+                if (!matched) {
+                    throw new Error('未找到该收藏作者');
+                }
+                const matchedId = matched.user_id || matched.kwaiId || matched.eid || matched.nickname || targetName;
+                await API.kuaishou.removeAccount(matchedId);
                 Toast.show('已取消收藏博主', 'success');
                 favBtn.innerHTML = '⭐ 收藏博主';
                 favBtn.className = 'btn btn-secondary btn-sm';
